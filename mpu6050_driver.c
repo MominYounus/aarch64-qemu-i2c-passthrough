@@ -1,3 +1,4 @@
+#include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/i2c-smbus.h>
 #include <linux/i2c.h>
@@ -23,7 +24,8 @@ static DEFINE_MUTEX(mpu_mutex);
 
 static ssize_t mpu_read(struct file *file, char __user *user_buf, size_t count,
                         loff_t *ppos) {
-    int ret;
+    int len;
+    s32 ret;
     s32 accel_x_h, accel_x_l;
     s32 accel_y_h, accel_y_l;
     s32 accel_z_h, accel_z_l;
@@ -37,9 +39,6 @@ static ssize_t mpu_read(struct file *file, char __user *user_buf, size_t count,
     s16 gyro_y;
     s16 gyro_z;
     char kernel_buf[128];
-
-    if (*ppos > 0)
-        return 0;
 
     if (!mpu_client)
         return -ENODEV;
@@ -63,6 +62,12 @@ static ssize_t mpu_read(struct file *file, char __user *user_buf, size_t count,
     accel_z_h = i2c_smbus_read_byte_data(mpu_client, 0x3F);
     accel_z_l = i2c_smbus_read_byte_data(mpu_client, 0x40);
 
+    if (accel_x_h < 0 || accel_x_l < 0 || accel_y_h < 0 || accel_y_l < 0 ||
+        accel_z_h < 0 || accel_z_l < 0) {
+        ret = -EREMOTEIO;
+        goto unlock_and_exit;
+    }
+
     /* Gyroscope */
     /* X Axis */
     /* High Byte = 0x43, Low Byte = 0x44 */
@@ -79,6 +84,12 @@ static ssize_t mpu_read(struct file *file, char __user *user_buf, size_t count,
     gyro_z_h = i2c_smbus_read_byte_data(mpu_client, 0x47);
     gyro_z_l = i2c_smbus_read_byte_data(mpu_client, 0x48);
 
+    if (gyro_x_h < 0 || gyro_x_l < 0 || gyro_y_h < 0 || gyro_y_l < 0 ||
+        gyro_z_h < 0 || gyro_z_l < 0) {
+        ret = -EREMOTEIO;
+        goto unlock_and_exit;
+    }
+
     /* Two 8 bit values(accel_x_h and accel_y_h) in a single 16 bit(accel_x) */
     /* Accelrometer */
     accel_x = (accel_x_h << 8) | accel_x_l;
@@ -91,16 +102,10 @@ static ssize_t mpu_read(struct file *file, char __user *user_buf, size_t count,
     gyro_z = (gyro_z_h << 8) | gyro_z_l;
 
     /* Readable string for cat command */
-    ret = snprintf(kernel_buf, sizeof(kernel_buf), "A: %d %d %d | G %d %d %d\n",
+    len = snprintf(kernel_buf, sizeof(kernel_buf), "A: %d %d %d | G %d %d %d\n",
                    accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
 
-    /* Kernel buf to User buf */
-    if (copy_to_user(user_buf, kernel_buf + *ppos, min(count, (size_t)len))) {
-        goto unlock_and_exit;
-        ret = -EFAULT;
-    }
-
-    *ppos += len;
+    ret = simple_read_from_buffer(user_buf, count, ppos, kernel_buf, len);
 
  unlock_and_exit:
     mutex_unlock(&mpu_mutex);
@@ -144,7 +149,13 @@ static int mpu6050_probe(struct i2c_client *client) {
 
 static void mpu6050_remove(struct i2c_client *client) {
     misc_deregister(&mpu_misc);
+
+    mutex_lock(&mpu_mutex);
+
     mpu_client = NULL;
+
+    mutex_unlock(&mpu_mutex);
+
     dev_info(&client->dev, "Removed MPU6050 and /dev/mpu_sensor.\n");
 }
 
