@@ -9,10 +9,10 @@ void *read_sensor(void *thread_id)
 	long id = (long)thread_id;
 		
 	int fd = open("/dev/mpu_sensor", O_RDONLY, S_IRUSR);
-	char buffer;
+	char buffer[128];
 
-	while (read(fd, &buffer, 1) > 0){
-		printf("%c ", buffer);
+	while (read(fd, &buffer, sizeof(buffer)) > 0){
+	  printf("%s\n", buffer);
 		usleep(100000);
 	}
 	printf("\n");

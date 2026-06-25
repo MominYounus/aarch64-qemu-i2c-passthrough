@@ -1,3 +1,5 @@
+#include "include/mpu_ioctl.h"
+#include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/i2c-smbus.h>
@@ -112,9 +114,64 @@ static ssize_t mpu_read(struct file *file, char __user *user_buf, size_t count,
     return ret;
 }
 
+static long mpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+    int requested_range;
+    u8 reg_value;
+    s32 ret;
+
+    if (_IOC_TYPE(cmd) != MPU_IOC_MAGIC)
+        return -ENOTTY;
+
+    switch (cmd) {
+    case MPU_SET_ACCEL_RANGE:
+
+        if (get_user(requested_range, (int __user *)arg))
+            return -EFAULT;
+
+        /* ACCEL_CONFIG (0x1C)
+         * 0x00 sets it to ±2g
+         * 0x08 sets it to ±4g
+         * 0x10 sets it to ±8g
+         * 0x18 sets it to ±16g
+         */
+
+        if (requested_range == 2)
+            reg_value = 0x00;
+
+        else if (requested_range == 4)
+            reg_value = 0x08;
+
+        else if (requested_range == 8)
+            reg_value = 0x10;
+
+        else if (requested_range == 16)
+            reg_value = 0x18;
+
+        else
+            return -EINVAL;
+
+        mutex_lock(&mpu_mutex);
+
+        ret = i2c_smbus_write_byte_data(mpu_client, 0x1C, reg_value);
+        if (ret < 0) {
+            mutex_unlock(&mpu_mutex);
+            return -EREMOTEIO;
+        }
+
+        mutex_unlock(&mpu_mutex);
+        break;
+
+    default:
+        return -ENOTTY;
+    }
+
+    return 0;
+}
+
 static const struct file_operations mpu_fops = {
     .owner = THIS_MODULE,
     .read = mpu_read,
+    .unlocked_ioctl = mpu_ioctl,
 };
 
 static struct miscdevice mpu_misc = {
@@ -129,9 +186,33 @@ static int mpu6050_probe(struct i2c_client *client) {
     dev_info(&client->dev, "probe triggered for address: 0x%02x\n",
              client->addr);
 
-    ret = i2c_smbus_write_byte_data(client, 0x6B, 0x00);
+    /* Reset the Device
+     * writing 0x80 to PWR_MGT(0x6B)
+     */
+    ret = i2c_smbus_write_byte_data(client, 0x6B, 0x80);
+    if (ret < 0) {
+        dev_err(&client->dev, "Failed to Reset.\n");
+        return ret;
+    }
+
+    // mpu6050 needs few miliseconds to reboot after the reset
+    msleep(100);
+
+    /* wake up the sensor, let's set the clock source to the x axis
+     * writing 0x01 to Power Management PWR_MGT(0x6B)
+     */
+    ret = i2c_smbus_write_byte_data(client, 0x6B, 0x01);
     if (ret < 0) {
         dev_err(&client->dev, "Failed to woke up sensor.\n");
+        return ret;
+    }
+
+    /*let's try setting the Accelrometer explicitly to +/- 2g
+     * writing 0x00 to ACCEL_CONFIG(0x1C)
+     */
+    ret = i2c_smbus_write_byte_data(client, 0x1C, 0x00);
+    if (ret < 0) {
+        dev_err(&client->dev, "Failed set  sensor.\n");
         return ret;
     }
 
