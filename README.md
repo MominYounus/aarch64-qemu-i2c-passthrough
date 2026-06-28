@@ -71,3 +71,9 @@ cat /dev/mpu_sensor
 * Managing the VFS boundary using struct file_operations, the miscdevice framework, and copy_to_user().
 
 * Debugging PCIe and XHCI driver bindings in a QEMU virt machine
+
+* IOCTL Implementation: Dynamically changing accelerometer sensitivity ranges from userspace.
+
+* Kernel Workqueues (delayed_work): Asynchronous, process-context hardware polling.
+
+* Concurrency Control: Mutex locking to prevent race conditions during VFS reads and module unloading
